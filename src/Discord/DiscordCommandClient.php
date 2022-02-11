@@ -345,13 +345,14 @@ class DiscordCommandClient extends Discord
         $commandInstance = new Command(
             $this,
             $command,
-            $callable,
             $options['description'],
-            $options['longDescription'],
-            $options['usage'],
-            $options['cooldown'],
-            $options['cooldownMessage']
         );
+        $commandInstance
+            ->run($callable)
+            ->setLongDescription($options['longDescription'])
+            ->setUsage($options['usage'])
+            ->setCooldown($options['cooldown'])
+            ->setCooldownMessage($options['cooldownMessage']);
 
         return [$commandInstance, $options];
     }

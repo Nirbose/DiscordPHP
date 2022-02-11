@@ -95,31 +95,97 @@ class Command
      *
      * @param DiscordCommandClient $client          The Discord Command Client.
      * @param string               $command         The command trigger.
-     * @param \Callable            $callable        The callable function.
      * @param string               $description     The short description of the command.
-     * @param string               $longDescription The long description of the command.
-     * @param string               $usage           The usage of the command.
-     * @param int                  $cooldown        The cooldown of the command in milliseconds.
-     * @param string               $cooldownMessage The cooldown message to show when a cooldown is in effect.
      */
     public function __construct(
         DiscordCommandClient $client,
         string $command,
-        callable $callable,
         string $description,
-        string $longDescription,
-        string $usage,
-        int $cooldown,
-        string $cooldownMessage
     ) {
         $this->client = $client;
         $this->command = $command;
-        $this->callable = $callable;
         $this->description = $description;
+    }
+
+    /**
+     * Create a Command instance.
+     *
+     * @param DiscordCommandClient $client
+     * @param string $name
+     * @param string $description
+     * @return self
+     */
+    public static function create(
+        DiscordCommandClient $client, 
+        string $name, 
+        string $description
+    ) {
+        return new static($client, $name, $description); 
+    }
+
+    /**
+     * set long description for the command
+     * 
+     * @param string $longDescription
+     * @return self
+     */
+    public function setLongDescription(string $longDescription)
+    {
         $this->longDescription = $longDescription;
-        $this->usage = $usage;
+
+        return $this;
+    }
+
+    /**
+     * set a cooldown for the command.
+     *
+     * @param integer $cooldown
+     * @return self
+     */
+    public function setCooldown(int $cooldown)
+    {
         $this->cooldown = $cooldown;
+
+        return $this;
+    }
+
+    /**
+     * set a message during cooldown
+     *
+     * @param string $cooldownMessage
+     * @return self
+     */
+    public function setCooldownMessage(string $cooldownMessage)
+    {
         $this->cooldownMessage = $cooldownMessage;
+
+        return $this;
+    }
+
+    /**
+     * set usage.
+     *
+     * @param string $usage
+     * @return self
+     */
+    public function setUsage(string $usage)
+    {
+        $this->usage = $usage;
+
+        return $this;
+    }
+
+    /**
+     * set the callable function.
+     *
+     * @param \Callable $callable
+     * @return self
+     */
+    public function run(callable $callable)
+    {
+        $this->callable = $callable;
+
+        return $this;
     }
 
     /**
@@ -255,7 +321,13 @@ class Command
             $this->cooldowns[$message->author->id] = $currentTime + $this->cooldown;
         }
 
-        return call_user_func_array($this->callable, [$message, $args]);
+        $without_prefix = explode(" ", substr($message->content, strlen($this->client->getCommandClientOptions()['prefix'])));
+
+        if (str_starts_with(strtolower($without_prefix[0]), $this->command)) {
+            return call_user_func_array($this->callable, [$message, $args]);
+        }
+
+        return null;
     }
 
     /**
