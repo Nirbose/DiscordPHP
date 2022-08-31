@@ -15,6 +15,9 @@ use Discord\Helpers\Deferred;
 use Discord\Parts\Thread\Member;
 use Discord\WebSockets\Event;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#thread-member-update
+ */
 class ThreadMemberUpdate extends Event
 {
     public function handle(Deferred &$deferred, $data)
@@ -24,7 +27,7 @@ class ThreadMemberUpdate extends Event
 
         foreach ($guild->channels as $channel) {
             if ($thread = $channel->threads->get('id', $data->id)) {
-                $thread->members->push($member);
+                $thread->members->pushItem($member);
                 break;
             }
         }

@@ -30,7 +30,7 @@ namespace Discord\Parts\Permissions;
  * @property bool $move_members
  * @property bool $use_vad
  * @property bool $manage_events
- * @property bool $start_embedded_activities
+ * @property bool $start_embedded_activities @todo $use_embedded_activities
  *
  * @property bool $add_reactions
  * @property bool $send_messages
@@ -39,7 +39,6 @@ namespace Discord\Parts\Permissions;
  * @property bool $embed_links
  * @property bool $attach_files
  * @property bool $read_message_history
- * @property bool $mention_everyone
  * @property bool $use_external_emojis
  * @property bool $manage_webhooks
  * @property bool $use_application_commands

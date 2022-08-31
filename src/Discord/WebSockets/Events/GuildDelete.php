@@ -15,6 +15,9 @@ use Discord\Parts\Guild\Guild;
 use Discord\WebSockets\Event;
 use Discord\Helpers\Deferred;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#guild-delete
+ */
 class GuildDelete extends Event
 {
     /**
@@ -22,14 +25,6 @@ class GuildDelete extends Event
      */
     public function handle(Deferred &$deferred, $data): void
     {
-        $guild = $this->discord->guilds->get('id', $data->id);
-
-        if (! $guild) {
-            $guild = $this->factory->create(Guild::class, $data, true);
-        }
-
-        $this->discord->guilds->pull($guild->id);
-
-        $deferred->resolve([$guild, $data->unavailable ?? false]);
+        $deferred->resolve([$this->discord->guilds->pull($data->id), $data->unavailable ?? false]);
     }
 }

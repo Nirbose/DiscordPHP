@@ -17,7 +17,6 @@ use Discord\Exceptions\InvalidOverwriteException;
 use Discord\Helpers\Collection;
 use Discord\Parts\Embed\Embed;
 use Discord\Parts\Guild\Guild;
-use Discord\Parts\Guild\Invite;
 use Discord\Parts\Guild\Role;
 use Discord\Parts\Part;
 use Discord\Parts\Permissions\ChannelPermission;
@@ -31,12 +30,15 @@ use Discord\WebSockets\Event;
 use Discord\Helpers\Deferred;
 use Discord\Http\Endpoint;
 use Discord\Http\Exceptions\NoPermissionsException;
+use Discord\Parts\Permissions\RolePermission;
 use Discord\Parts\Thread\Thread;
+use Discord\Repository\Channel\InviteRepository;
 use Discord\Repository\Channel\ThreadRepository;
 use React\Promise\ExtendedPromiseInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 use Traversable;
 
+use function Discord\getSnowflakeTimestamp;
 use function React\Promise\all;
 use function React\Promise\reject;
 use function React\Promise\resolve;
@@ -52,30 +54,32 @@ use function React\Promise\resolve;
  * @property Guild|null          $guild                         The guild that the channel belongs to. Only for text or voice channels.
  * @property int|null            $position                      The position of the channel on the sidebar.
  * @property OverwriteRepository $overwrites                    Permission overwrites
- * @property string|null         $name                          The name of the channel.
- * @property string|null         $topic                         The topic of the channel.
+ * @property ?string|null        $name                          The name of the channel.
+ * @property ?string|null        $topic                         The topic of the channel.
  * @property bool|null           $nsfw                          Whether the channel is NSFW.
- * @property string|null         $last_message_id               The unique identifier of the last message sent in the channel.
+ * @property ?string|null        $last_message_id               The unique identifier of the last message sent in the channel (or thread for forum channels) (may not point to an existing or valid message or thread).
  * @property int|null            $bitrate                       The bitrate of the channel. Only for voice channels.
  * @property int|null            $user_limit                    The user limit of the channel.
  * @property int|null            $rate_limit_per_user           Amount of seconds a user has to wait before sending a new message.
  * @property Collection|User[]   $recipients                    A collection of all the recipients in the channel. Only for DM or group channels.
  * @property User|null           $recipient                     The first recipient of the channel. Only for DM or group channels.
  * @property string|null         $recipient_id                  The ID of the recipient of the channel, if it is a DM channel.
- * @property string|null         $icon                          Icon hash.
+ * @property ?string|null        $icon                          Icon hash.
  * @property string|null         $owner_id                      The ID of the DM creator. Only for DM or group channels.
  * @property string|null         $application_id                ID of the group DM creator if it is a bot.
- * @property string|null         $parent_id                     ID of the parent channel.
+ * @property ?string|null        $parent_id                     ID of the parent channel.
  * @property Carbon|null         $last_pin_timestamp            When the last message was pinned.
- * @property string|null         $rtc_region                    Voice region id for the voice channel, automatic when set to null.
+ * @property ?string|null        $rtc_region                    Voice region id for the voice channel, automatic when set to null.
  * @property int|null            $video_quality_mode            The camera video quality mode of the voice channel, 1 when not present.
  * @property int|null            $default_auto_archive_duration Default duration for newly created threads, in minutes, to automatically archive the thread after recent activity, can be set to: 60, 1440, 4320, 10080.
+ * @property int|null            $flags                         Channel flags combined as a bitfield.
  * @property string|null         $permissions                   Computed permissions for the invoking user in the channel, including overwrites, only included when part of the resolved data received on a slash command interaction.
  * @property bool                $is_private                    Whether the channel is a private channel.
  * @property MemberRepository    $members                       Voice channel only - members in the channel.
  * @property MessageRepository   $messages                      Text channel only - messages sent in the channel.
  * @property WebhookRepository   $webhooks                      Webhooks in the channel.
  * @property ThreadRepository    $threads                       Threads that belong to the channel.
+ * @property InviteRepository    $invites                       Invites in the channel.
  *
  * @method ExtendedPromiseInterface sendMessage(MessageBuilder $builder)
  * @method ExtendedPromiseInterface sendMessage(string $text, bool $tts = false, Embed|array $embed = null, array $allowed_mentions = null, ?Message $replyTo = null)
@@ -88,14 +92,17 @@ class Channel extends Part
     public const TYPE_GROUP = 3;
     public const TYPE_CATEGORY = 4;
     public const TYPE_NEWS = 5;
-    public const TYPE_GAME_STORE = 6;
     public const TYPE_NEWS_THREAD = 10;
     public const TYPE_PUBLIC_THREAD = 11;
     public const TYPE_PRIVATE_THREAD = 12;
     public const TYPE_STAGE_CHANNEL = 13;
+    public const TYPE_DIRECTORY = 14;
+    public const TYPE_FORUM = 15;
 
     public const VIDEO_QUALITY_AUTO = 1;
     public const VIDEO_QUALITY_FULL = 2;
+
+    public const FLAG_PINNED = (1 << 1);
 
     /**
      * @inheritdoc
@@ -123,6 +130,7 @@ class Channel extends Part
         'video_quality_mode',
         'default_auto_archive_duration',
         'permissions',
+        'flags',
         'is_private',
     ];
 
@@ -135,6 +143,7 @@ class Channel extends Part
         'messages' => MessageRepository::class,
         'webhooks' => WebhookRepository::class,
         'threads' => ThreadRepository::class,
+        'invites' => InviteRepository::class,
     ];
 
     /**
@@ -193,7 +202,7 @@ class Channel extends Part
                 if (! $user = $this->discord->users->get('id', $recipient->id)) {
                     $user = $this->factory->create(User::class, $recipient, true);
                 }
-                $recipients->push($user);
+                $recipients->pushItem($user);
             }
         }
 
@@ -242,7 +251,7 @@ class Channel extends Part
                     $message = $this->factory->create(Message::class, $response, true);
                 }
 
-                $messages->push($message);
+                $messages->pushItem($message);
             }
 
             return $messages;
@@ -306,12 +315,8 @@ class Channel extends Part
      */
     public function setOverwrite(Part $part, Overwrite $overwrite, ?string $reason = null): ExtendedPromiseInterface
     {
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->manage_roles) {
-                return reject(new NoPermissionsException('You do not have permission to edit roles in the specified channel.'));
-            }
+        if ($this->guild && ! $this->getBotPermissions()->manage_roles) {
+            return reject(new NoPermissionsException('You do not have permission to edit roles in the specified channel.'));
         }
 
         if ($part instanceof Member) {
@@ -374,12 +379,8 @@ class Channel extends Part
             return reject(new \RuntimeException('You cannot move a member in a text channel.'));
         }
 
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->move_members) {
-                return reject(new NoPermissionsException('You do not have permission to move members in the specified channel.'));
-            }
+        if (! $this->getBotPermissions()->move_members) {
+            return reject(new NoPermissionsException('You do not have permission to move members in the specified channel.'));
         }
 
         if ($member instanceof Member) {
@@ -411,12 +412,8 @@ class Channel extends Part
             return reject(new \RuntimeException('You cannot mute a member in a text channel.'));
         }
 
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->mute_members) {
-                return reject(new NoPermissionsException('You do not have permission to mute members in the specified channel.'));
-            }
+        if (! $this->getBotPermissions()->mute_members) {
+            return reject(new NoPermissionsException('You do not have permission to mute members in the specified channel.'));
         }
 
         if ($member instanceof Member) {
@@ -448,12 +445,8 @@ class Channel extends Part
             return reject(new \RuntimeException('You cannot unmute a member in a text channel.'));
         }
 
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->mute_members) {
-                return reject(new NoPermissionsException('You do not have permission to unmute members in the specified channel.'));
-            }
+        if (! $this->getBotPermissions()->mute_members) {
+            return reject(new NoPermissionsException('You do not have permission to unmute members in the specified channel.'));
         }
 
         if ($member instanceof Member) {
@@ -473,11 +466,14 @@ class Channel extends Part
      *
      * @see https://discord.com/developers/docs/resources/channel#create-channel-invite
      *
-     * @param array $options An array of options. All fields are optional.
-     * @param int   $options['max_age']   The time that the invite will be valid in seconds.
-     * @param int   $options['max_uses']  The amount of times the invite can be used.
-     * @param bool  $options['temporary'] Whether the invite is for temporary membership.
-     * @param bool  $options['unique']    Whether the invite code should be unique (useful for creating many unique one time use invites).
+     * @param array  $options                          An array of options. All fields are optional.
+     * @param int    $options['max_age']               The time that the invite will be valid in seconds.
+     * @param int    $options['max_uses']              The amount of times the invite can be used.
+     * @param bool   $options['temporary']             Whether the invite is for temporary membership.
+     * @param bool   $options['unique']                Whether the invite code should be unique (useful for creating many unique one time use invites).
+     * @param int    $options['target_type']           The type of target for this voice channel invite.
+     * @param string $options['target_user_id']        The id of the user whose stream to display for this invite, required if target_type is `Invite::TARGET_TYPE_STREAM`, the user must be streaming in the channel.
+     * @param string $options['target_application_id'] The id of the embedded application to open for this invite, required if target_type is `Invite::TARGET_TYPE_EMBEDDED_APPLICATION`, the application must have the EMBEDDED flag.
      *
      * @throws NoPermissionsException
      *
@@ -485,12 +481,12 @@ class Channel extends Part
      */
     public function createInvite($options = []): ExtendedPromiseInterface
     {
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
+        if (! $this->allowInvite()) {
+            return reject(new \RuntimeException('You cannot create invite in this type of channel.'));
+        }
 
-            if (! $botperms->create_instant_invite) {
-                return reject(new NoPermissionsException('You do not have permission to create an invite for the specified channel.'));
-            }
+        if (! $this->getBotPermissions()->create_instant_invite) {
+            return reject(new NoPermissionsException('You do not have permission to create an invite for the specified channel.'));
         }
 
         $resolver = new OptionsResolver();
@@ -500,11 +496,17 @@ class Channel extends Part
                 'max_uses',
                 'temporary',
                 'unique',
+                'target_type',
+                'target_user_id',
+                'target_application_id',
             ])
             ->setAllowedTypes('max_age', 'int')
             ->setAllowedTypes('max_uses', 'int')
             ->setAllowedTypes('temporary', 'bool')
             ->setAllowedTypes('unique', 'bool')
+            ->setAllowedTypes('target_type', 'int')
+            ->setAllowedTypes('target_user_id', ['string', 'int'])
+            ->setAllowedTypes('target_application_id', ['string', 'int'])
             ->setAllowedValues('max_age', range(0, 604800))
             ->setAllowedValues('max_uses', range(0, 100));
 
@@ -534,45 +536,35 @@ class Channel extends Part
             return reject(new \UnexpectedValueException('$messages must be an array or implement Traversable.'));
         }
 
-        $count = count($messages);
-
-        if ($count == 0) {
-            return resolve();
-        } elseif ($count == 1 || $this->is_private) {
-            foreach ($messages as $message) {
-                if ($message instanceof Message ||
-                    $message = $this->messages->get('id', $message)
-                ) {
-                    return $message->delete();
-                }
-
-                return $this->http->delete(Endpoint::bind(Endpoint::CHANNEL_MESSAGE, $this->id, $message));
-            }
-        } else {
-            $messageID = [];
-
-            foreach ($messages as $message) {
-                if ($message instanceof Message) {
-                    $messageID[] = $message->id;
-                } else {
-                    $messageID[] = $message;
-                }
-            }
-
-            $promises = [];
-
-            $headers = [];
-            if (isset($reason)) {
-                $headers['X-Audit-Log-Reason'] = $reason;
-            }
-
-            while (! empty($messageID)) {
-                $promises[] = $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES_BULK_DELETE, $this->id), ['messages' => array_slice($messageID, 0, 100)], $headers);
-                $messageID = array_slice($messageID, 100);
-            }
-
-            return all($promises);
+        $headers = $promises = $messagesBulk = $messagesSingle = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
         }
+
+        foreach ($messages as $message) {
+            if ($message instanceof Message) {
+                $message = $message->id;
+            }
+
+            if ($this->is_private || getSnowflakeTimestamp($message) < time() - 1209600) {
+                $messagesSingle[] = $message;
+            } else {
+                $messagesBulk[] = $message;
+            }
+        }
+
+        while (count($messagesBulk) > 1) {
+            $promises[] = $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES_BULK_DELETE, $this->id), ['messages' => array_slice($messagesBulk, 0, 100)], $headers);
+            $messagesBulk = array_slice($messagesBulk, 100);
+        }
+
+        $messagesSingle = array_merge($messagesSingle, $messagesBulk);
+
+        foreach ($messagesSingle as $message) {
+            $promises[] = $this->http->delete(Endpoint::bind(Endpoint::CHANNEL_MESSAGE, $this->id, $message));
+        }
+
+        return all($promises);
     }
 
     /**
@@ -606,12 +598,8 @@ class Channel extends Part
      */
     public function getMessageHistory(array $options): ExtendedPromiseInterface
     {
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->read_message_history) {
-                return reject(new NoPermissionsException('You do not have permission to read the specified channel\'s message history.'));
-            }
+        if (! $this->is_private && ! $this->getBotPermissions()->read_message_history) {
+            return reject(new NoPermissionsException('You do not have permission to read the specified channel\'s message history.'));
         }
 
         $resolver = new OptionsResolver();
@@ -649,7 +637,7 @@ class Channel extends Part
                 if (! $message = $this->messages->get('id', $response->id)) {
                     $message = $this->factory->create(Message::class, $response, true);
                 }
-                $messages->push($message);
+                $messages->pushItem($message);
             }
 
             return $messages;
@@ -671,12 +659,8 @@ class Channel extends Part
      */
     public function pinMessage(Message $message, ?string $reason = null): ExtendedPromiseInterface
     {
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->manage_messages) {
-                return reject(new NoPermissionsException('You do not have permission to pin messages in the specified channel.'));
-            }
+        if (! $this->is_private && ! $this->getBotPermissions()->manage_messages) {
+            return reject(new NoPermissionsException('You do not have permission to pin messages in the specified channel.'));
         }
 
         if ($message->pinned) {
@@ -714,12 +698,8 @@ class Channel extends Part
      */
     public function unpinMessage(Message $message, ?string $reason = null): ExtendedPromiseInterface
     {
-        if (! $this->is_private) {
-            $botperms = $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
-
-            if (! $botperms->manage_messages) {
-                return reject(new NoPermissionsException('You do not have permission to unpin messages in the specified channel.'));
-            }
+        if (! $this->is_private && ! $this->getBotPermissions()->manage_messages) {
+            return reject(new NoPermissionsException('You do not have permission to unpin messages in the specified channel.'));
         }
 
         if (! $message->pinned) {
@@ -747,6 +727,8 @@ class Channel extends Part
      *
      * @see https://discord.com/developers/docs/resources/channel#get-channel-invites
      *
+     * @deprecated 7.1.0 Use `$channel->invites->freshen()`
+     *
      * @return ExtendedPromiseInterface<Collection<Invite>>
      */
     public function getInvites(): ExtendedPromiseInterface
@@ -755,7 +737,7 @@ class Channel extends Part
             $invites = new Collection();
 
             foreach ($response as $invite) {
-                $invites->push($this->factory->create(Invite::class, $invite, true));
+                $invites->pushItem($this->factory->create(Invite::class, $invite, true));
             }
 
             return $invites;
@@ -776,7 +758,7 @@ class Channel extends Part
                 $overwrite = (array) $overwrite;
                 $overwrite['channel_id'] = $this->id;
 
-                $this->overwrites->push($this->factory->create(Overwrite::class, $overwrite, true));
+                $this->overwrites->pushItem($this->factory->create(Overwrite::class, $overwrite, true));
             }
         }
     }
@@ -786,9 +768,9 @@ class Channel extends Part
      *
      * @see https://discord.com/developers/docs/resources/channel#start-thread-without-message
      *
-     * @param string      $name                  the name of the thread.
-     * @param bool        $private               whether the thread should be private. cannot start a private thread in a news channel.
-     * @param int         $auto_archive_duration number of minutes of inactivity until the thread is auto-archived. one of 60, 1440, 4320, 10080.
+     * @param string      $name                  The name of the thread.
+     * @param bool        $private               Whether the thread should be private. cannot start a private thread in a news channel channel.
+     * @param int         $auto_archive_duration Number of minutes of inactivity until the thread is auto-archived. one of 60, 1440, 4320, 10080.
      * @param string|null $reason                Reason for Audit Log.
      *
      * @throws \RuntimeException
@@ -816,19 +798,6 @@ class Channel extends Part
 
         if (! in_array($auto_archive_duration, [60, 1440, 4320, 10080])) {
             return reject(new \UnexpectedValueException('`auto_archive_duration` must be one of 60, 1440, 4320, 10080.'));
-        }
-
-        switch ($auto_archive_duration) {
-            case 4320:
-                if (! $this->guild->feature_three_day_thread_archive) {
-                    return reject(new \RuntimeException('Guild does not have access to three day thread archive.'));
-                }
-                break;
-            case 10080:
-                if (! $this->guild->feature_seven_day_thread_archive) {
-                    return reject(new \RuntimeException('Guild does not have access to seven day thread archive.'));
-                }
-                break;
         }
 
         $headers = [];
@@ -892,8 +861,8 @@ class Channel extends Part
             return reject(new \RuntimeException('You can only send messages to text channels.'));
         }
 
-        if (! $this->is_private && $member = $this->guild->members->offsetGet($this->discord->id)) {
-            $botperms = $member->getPermissions($this);
+        if (! $this->is_private) {
+            $botperms = $this->getBotPermissions();
 
             if (! $botperms->send_messages) {
                 return reject(new NoPermissionsException('You do not have permission to send messages in the specified channel.'));
@@ -917,6 +886,11 @@ class Channel extends Part
 
             return $this->http->post(Endpoint::bind(Endpoint::CHANNEL_MESSAGES, $this->id), $message);
         })()->then(function ($response) {
+            // Workaround for sendMessage() no guild_id
+            if ($this->guild_id && ! isset($response->guild_id)) {
+                $response->guild_id = $this->guild_id;
+            }
+
             return $this->factory->create(Message::class, $response, true);
         });
     }
@@ -1027,7 +1001,7 @@ class Channel extends Part
             $filterResult = call_user_func_array($filter, [$message]);
 
             if ($filterResult) {
-                $messages->push($message);
+                $messages->pushItem($message);
 
                 if ($options['limit'] !== false && sizeof($messages) >= $options['limit']) {
                     $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
@@ -1059,7 +1033,7 @@ class Channel extends Part
      */
     public function allowText()
     {
-        return in_array($this->type, [self::TYPE_TEXT, self::TYPE_DM, self::TYPE_GROUP, self::TYPE_NEWS]);
+        return in_array($this->type, [self::TYPE_TEXT, self::TYPE_DM, self::TYPE_VOICE, self::TYPE_GROUP, self::TYPE_NEWS]);
     }
 
     /**
@@ -1070,6 +1044,26 @@ class Channel extends Part
     public function allowVoice()
     {
         return in_array($this->type, [self::TYPE_VOICE, self::TYPE_STAGE_CHANNEL]);
+    }
+
+    /**
+     * Returns if allow invite.
+     *
+     * @return bool if we can make invite or not.
+     */
+    public function allowInvite()
+    {
+        return in_array($this->type, [self::TYPE_TEXT, self::TYPE_VOICE, self::TYPE_NEWS, self::TYPE_STAGE_CHANNEL, self::TYPE_FORUM]);
+    }
+
+    /**
+     * Returns the bot's permissions in the channel.
+     *
+     * @return RolePermission
+     */
+    public function getBotPermissions(): RolePermission
+    {
+        return $this->guild->members->offsetGet($this->discord->id)->getPermissions($this);
     }
 
     /**
@@ -1088,6 +1082,9 @@ class Channel extends Part
             'position' => $this->position,
             'parent_id' => $this->parent_id,
             'nsfw' => $this->nsfw,
+            'rtc_region' => $this->rtc_region,
+            'video_quality_mode' => $this->video_quality_mode,
+            'default_auto_archive_duration' => $this->default_auto_archive_duration,
         ];
     }
 

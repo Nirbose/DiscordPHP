@@ -16,7 +16,6 @@ use ArrayIterator;
 use Countable;
 use IteratorAggregate;
 use JsonSerializable;
-use Serializable;
 use Traversable;
 
 /**
@@ -224,6 +223,24 @@ class Collection implements ArrayAccess, JsonSerializable, IteratorAggregate, Co
     {
         foreach ($this->items as $item) {
             return $item;
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns the last element of the collection.
+     *
+     * @return mixed
+     */
+    public function last()
+    {
+        $last = end($this->items);
+
+        if ($last !== false) {
+            reset($this->items);
+
+            return $last;
         }
 
         return null;

@@ -20,6 +20,9 @@ use React\Promise\PromiseInterface;
 use function Discord\poly_strlen;
 
 /**
+ * Buttons are interactive components that render on messages.
+ * They can be clicked by users, and send an interaction to your app when clicked.
+ *
  * @see https://discord.com/developers/docs/interactions/message-components#buttons
  */
 class Button extends Component
@@ -89,12 +92,12 @@ class Button extends Component
     /**
      * Creates a new button.
      *
-     * @param int $style Style of the button.
+     * @param int         $style     Style of the button.
      * @param string|null $custom_id custom ID of the button. If not given, an UUID will be used
      *
      * @throws \InvalidArgumentException
      */
-    public function __construct(int $style, ?string $custom_id)
+    public function __construct(int $style, ?string $custom_id = null)
     {
         if (! in_array($style, [
             self::STYLE_PRIMARY,
@@ -115,7 +118,7 @@ class Button extends Component
     /**
      * Creates a new button.
      *
-     * @param int $style Style of the button.
+     * @param int         $style     Style of the button.
      * @param string|null $custom_id custom ID of the button.
      *
      * @return self

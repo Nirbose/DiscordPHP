@@ -15,6 +15,9 @@ use Discord\Parts\WebSockets\MessageReaction;
 use Discord\WebSockets\Event;
 use Discord\Helpers\Deferred;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#message-reaction-add
+ */
 class MessageReactionAdd extends Event
 {
     /**
@@ -43,7 +46,7 @@ class MessageReactionAdd extends Event
 
                 // New reaction added
                 if (! $addedReaction) {
-                    $message->reactions->push($message->reactions->create([
+                    $message->reactions->pushItem($message->reactions->create([
                         'count' => 1,
                         'me' => $reaction->user_id == $this->discord->id,
                         'emoji' => $reaction->emoji->getRawAttributes(),

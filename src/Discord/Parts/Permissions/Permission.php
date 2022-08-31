@@ -24,13 +24,14 @@ use Discord\Parts\Part;
  * @property bool       $create_instant_invite
  * @property bool       $manage_channels
  * @property bool       $view_channel
+ * @property bool       $mention_everyone
  * @property bool       $manage_roles
  */
 abstract class Permission extends Part
 {
     /**
      * Array of permissions that only apply to stage channels.
-     * i.e. indicated S in documentation
+     * i.e. indicated S in documentation.
      *
      * @var array
      */
@@ -45,26 +46,36 @@ abstract class Permission extends Part
 
     /**
      * Array of permissions that only apply to voice channels.
-     * i.e. indicated V in documentation
+     * i.e. indicated V in documentation.
      *
      * @var array
      */
     public const VOICE_PERMISSIONS = [
+        'add_reactions' => 6,
         'priority_speaker' => 8,
         'stream' => 9,
+        'send_messages' => 11,
+        'send_tts_messages' => 12,
+        'manage_messages' => 13,
+        'embed_links' => 14,
+        'attach_files' => 15,
+        'read_message_history' => 16,
+        'use_external_emojis' => 18,
         'connect' => 20,
         'speak' => 21,
         'mute_members' => 22,
         'deafen_members' => 23,
         'move_members' => 24,
         'use_vad' => 25,
+        'manage_webhooks' => 29,
         'manage_events' => 33,
-        'start_embedded_activities' => 39,
+        'use_external_stickers' => 37,
+        'start_embedded_activities' => 39, // @todo use_embedded_activities
     ];
 
     /**
      * Array of permissions that only apply to text channels.
-     * i.e. indicated T in documentation
+     * i.e. indicated T in documentation.
      *
      * @var array
      */
@@ -76,7 +87,6 @@ abstract class Permission extends Part
         'embed_links' => 14,
         'attach_files' => 15,
         'read_message_history' => 16,
-        'mention_everyone' => 17,
         'use_external_emojis' => 18,
         'manage_webhooks' => 29,
         'use_application_commands' => 31,
@@ -89,7 +99,7 @@ abstract class Permission extends Part
 
     /**
      * Array of permissions that can only be applied to roles.
-     * i.e. indicated empty in documentation
+     * i.e. indicated empty in documentation.
      *
      * @var array
      */
@@ -108,7 +118,7 @@ abstract class Permission extends Part
 
     /**
      * Array of permissions for all roles.
-     * i.e. indicated T,V,S in documentation
+     * i.e. indicated T,V,S in documentation.
      *
      * @var array
      */
@@ -116,6 +126,7 @@ abstract class Permission extends Part
         'create_instant_invite' => 0,
         'manage_channels' => 4,
         'view_channel' => 10,
+        'mention_everyone' => 17,
         'manage_roles' => 28,
     ];
 
@@ -154,6 +165,8 @@ abstract class Permission extends Part
     /**
      * Gets the bitwise attribute of the permission.
      *
+     * @see https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags
+     *
      * @return int|string
      */
     protected function getBitwiseAttribute()
@@ -182,6 +195,8 @@ abstract class Permission extends Part
     /**
      * Sets the bitwise attribute of the permission.
      *
+     * @see https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags
+     *
      * @param int|string $bitwise
      */
     protected function setBitwiseAttribute($bitwise)
@@ -197,6 +212,26 @@ abstract class Permission extends Part
                 $this->attributes[$permission] = false;
             }
         }
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * @todo replace start_embedded_activities in next major version
+     */
+    protected function getUseEmbeddedActivitiesAttribute()
+    {
+        return $this->attributes['start_embedded_activities'] ?? null;
+    }
+
+    /**
+     * @inheritdoc
+     *
+     * @todo replace start_embedded_activities in next major version
+     */
+    protected function setUseEmbeddedActivitiesAttribute($value)
+    {
+        $this->attributes['start_embedded_activities'] = $value;
     }
 
     /**

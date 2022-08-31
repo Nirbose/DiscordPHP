@@ -13,6 +13,7 @@ namespace Discord\Parts\Embed;
 
 use Carbon\Carbon;
 use Discord\Helpers\Collection;
+use Discord\Parts\Channel\Attachment;
 use Discord\Parts\Part;
 use function Discord\poly_strlen;
 
@@ -23,7 +24,7 @@ use function Discord\poly_strlen;
  * @property string|null        $type        The type of the embed.
  * @property string|null        $description A description of the embed.
  * @property string|null        $url         The URL of the embed.
- * @property Carbon|string|null $timestamp   A timestamp of the embed.
+ * @property Carbon|null        $timestamp   A timestamp of the embed.
  * @property int|null           $color       The color of the embed.
  * @property Footer|null        $footer      The footer of the embed.
  * @property Image|null         $image       The image of the embed.
@@ -50,17 +51,15 @@ class Embed extends Part
     /**
      * Gets the timestamp attribute.
      *
-     * @return Carbon The timestamp attribute.
+     * @return Carbon|null The timestamp attribute.
      */
-    protected function getTimestampAttribute(): Carbon
+    protected function getTimestampAttribute(): ?Carbon
     {
-        if (! array_key_exists('timestamp', $this->attributes)) {
-            return Carbon::now();
+        if (! isset($this->attributes['timestamp'])) {
+            return null;
         }
 
-        if (! empty($this->attributes['timestamp'])) {
-            return Carbon::parse($this->attributes['timestamp']);
-        }
+        return Carbon::parse($this->attributes['timestamp']);
     }
 
     /**
@@ -131,7 +130,7 @@ class Embed extends Part
                 $field = $this->factory->create(Field::class, $field, true);
             }
 
-            $fields->push($field);
+            $fields->pushItem($field);
         }
 
         return $fields;
@@ -163,7 +162,7 @@ class Embed extends Part
     /**
      * Sets the description of this embed.
      *
-     * @param string $description Maximum length is 2048 characters.
+     * @param string $description Maximum length is 4096 characters.
      *
      * @throws \LengthException
      */
@@ -171,8 +170,8 @@ class Embed extends Part
     {
         if (poly_strlen($description) === 0) {
             $this->attributes['description'] = null;
-        } elseif (poly_strlen($description) > 2048) {
-            throw new \LengthException('Embed description can not be longer than 2048 characters');
+        } elseif (poly_strlen($description) > 4096) {
+            throw new \LengthException('Embed description can not be longer than 4096 characters');
         } else {
             if ($this->exceedsOverallLimit(poly_strlen($description))) {
                 throw new \LengthException('Embed text values collectively can not exceed than 6000 characters');
@@ -385,13 +384,17 @@ class Embed extends Part
     /**
      * Set the image of this embed.
      *
-     * @param string $url
+     * @param string|Attachment $url
      *
      * @return $this
      */
     public function setImage($url): self
     {
-        $this->image = ['url' => (string) $url];
+        if ($url instanceof Attachment) {
+            $this->image = ['url' => 'attachment://'.$url->filename];
+        } else {
+            $this->image = ['url' => (string) $url];
+        }
 
         return $this;
     }
@@ -421,7 +424,7 @@ class Embed extends Part
      */
     public function setTimestamp(?int $timestamp = null): self
     {
-        $this->timestamp = (new Carbon(($timestamp !== null ? '@'.$timestamp : 'now')))->format('c');
+        $this->timestamp = Carbon::parse($timestamp)->format('c');
 
         return $this;
     }

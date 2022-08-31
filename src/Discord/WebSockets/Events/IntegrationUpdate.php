@@ -15,6 +15,9 @@ use Discord\WebSockets\Event;
 use Discord\Helpers\Deferred;
 use Discord\Parts\Guild\Integration;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#integration-update
+ */
 class IntegrationUpdate extends Event
 {
     /**
@@ -22,24 +25,30 @@ class IntegrationUpdate extends Event
      */
     public function handle(Deferred &$deferred, $data): void
     {
-        $oldIntegration = null;
+        $integrationPart = $oldIntegration = null;
 
         if ($guild = $this->discord->guilds->get('id', $data->guild_id)) {
             if ($oldIntegration = $guild->integrations->get('id', $data->id)) {
-                $integration = clone $oldIntegration;
-                $integration->fill((array) $data);
+                // Swap
+                $integrationPart = $oldIntegration;
+                $oldIntegration = clone $oldIntegration;
+
+                $integrationPart->fill((array) $data);
             }
         }
 
-        if (! $oldIntegration) {
+        if (! $integrationPart) {
             /** @var Integration */
-            $integration = $this->factory->create(Integration::class, $data, true);
+            $integrationPart = $this->factory->create(Integration::class, $data, true);
+            if ($guild = $integrationPart->guild) {
+                $guild->integrations->pushItem($integrationPart);
+            }
         }
 
         if (isset($data->user)) {
             $this->cacheUser($data->user);
         }
 
-        $deferred->resolve([$integration, $oldIntegration]);
+        $deferred->resolve([$integrationPart, $oldIntegration]);
     }
 }

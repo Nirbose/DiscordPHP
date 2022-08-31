@@ -55,7 +55,7 @@ class ScheduledEvent extends Part
     public const STATUS_SCHEDULED = 1;
     public const STATUS_ACTIVE = 2;
     public const STATUS_COMPLETED = 3;
-    public const STATUS_CANCELED  = 4;
+    public const STATUS_CANCELED = 4;
 
     /**
      * @inheritdoc
@@ -76,7 +76,7 @@ class ScheduledEvent extends Part
         'entity_id',
         'entity_metadata',
         'creator',
-        'user_count'
+        'user_count',
     ];
 
     /**
@@ -120,13 +120,13 @@ class ScheduledEvent extends Part
             foreach ($responses as $response) {
                 if (isset($response->member) && ! $user = $this->guild->members->get('id', $response->user->id)) {
                     $user = $this->factory->create(Member::class, $response->member, true);
-                    $this->guild->members->push($user);
+                    $this->guild->members->pushItem($user);
                 } elseif (! $user = $this->discord->users->get('id', $response->user->id)) {
                     $user = $this->factory->create(User::class, $response->user, true);
-                    $this->discord->users->push($user);
+                    $this->discord->users->pushItem($user);
                 }
 
-                $users->push($user);
+                $users->pushItem($user);
             }
 
             return $users;
@@ -146,7 +146,7 @@ class ScheduledEvent extends Part
     /**
      * Returns the channel attribute.
      *
-     * @return Channel    The channel in which the scheduled event will be hosted, or null.
+     * @return Channel The channel in which the scheduled event will be hosted, or null.
      */
     protected function getChannelAttribute(): ?Channel
     {
@@ -195,7 +195,7 @@ class ScheduledEvent extends Part
      *
      * @throws \Exception
      *
-     * @return Carbon     The time the scheduled event will start.
+     * @return Carbon The time the scheduled event will start.
      */
     protected function getScheduledStartTimeAttribute(): Carbon
     {

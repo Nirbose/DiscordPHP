@@ -11,7 +11,9 @@
 
 namespace Discord\Parts\Interactions;
 
+use Discord\Builders\Components\Component;
 use Discord\Builders\MessageBuilder;
+use Discord\Helpers\Collection;
 use Discord\Helpers\Multipart;
 use Discord\Http\Endpoint;
 use Discord\InteractionResponseType;
@@ -20,12 +22,15 @@ use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Guild;
 use Discord\Parts\Interactions\Command\Choice;
+use Discord\Parts\Interactions\Request\Component as RequestComponent;
 use Discord\Parts\Interactions\Request\InteractionData;
 use Discord\Parts\Part;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
+use Discord\WebSockets\Event;
 use React\Promise\ExtendedPromiseInterface;
 
+use function Discord\poly_strlen;
 use function React\Promise\reject;
 
 /**
@@ -33,21 +38,22 @@ use function React\Promise\reject;
  *
  * @see https://discord.com/developers/docs/interactions/receiving-and-responding#interactions
  *
- * @property string               $id             ID of the interaction.
- * @property string               $application_id ID of the application the interaction is for.
- * @property int                  $type           Type of interaction.
- * @property InteractionData|null $data           Data associated with the interaction.
- * @property string|null          $guild_id       ID of the guild the interaction was sent from.
- * @property Guild|null           $guild          Guild the interaction was sent from.
- * @property string|null          $channel_id     ID of the channel the interaction was sent from.
- * @property Channel|null         $channel        Channel the interaction was sent from.
- * @property Member|null          $member         Member who invoked the interaction.
- * @property User|null            $user           User who invoked the interaction.
- * @property string               $token          Continuation token for responding to the interaction.
- * @property int                  $version        Version of interaction.
- * @property Message|null         $message        Message that triggered the interactions, when triggered from message components.
- * @property string|null          $locale         The selected language of the invoking user.
- * @property string|null          $guild_locale   The guild's preferred locale, if invoked in a guild.
+ * @property      string               $id              ID of the interaction.
+ * @property      string               $application_id  ID of the application the interaction is for.
+ * @property      int                  $type            Type of interaction.
+ * @property      InteractionData|null $data            Data associated with the interaction.
+ * @property      string|null          $guild_id        ID of the guild the interaction was sent from.
+ * @property      Guild|null           $guild           Guild the interaction was sent from.
+ * @property      string|null          $channel_id      ID of the channel the interaction was sent from.
+ * @property      Channel|null         $channel         Channel the interaction was sent from.
+ * @property      Member|null          $member          Member who invoked the interaction.
+ * @property      User|null            $user            User who invoked the interaction.
+ * @property      string               $token           Continuation token for responding to the interaction.
+ * @property-read int                  $version         Version of interaction.
+ * @property      Message|null         $message         Message that triggered the interactions, when triggered from message components.
+ * @property      string|null          $app_permissions Bitwise set of permissions the app or bot has within the channel the interaction was sent from.
+ * @property      string|null          $locale          The selected language of the invoking user.
+ * @property      string|null          $guild_locale    The guild's preferred locale, if invoked in a guild.
  */
 class Interaction extends Part
 {
@@ -66,6 +72,7 @@ class Interaction extends Part
         'token',
         'version',
         'message',
+        'app_permissions',
         'locale',
         'guild_locale',
     ];
@@ -83,6 +90,16 @@ class Interaction extends Part
     protected $responded = false;
 
     /**
+     * Returns true if this interaction has been internally responded.
+     *
+     * @return bool The interaction is responded
+     */
+    public function isResponded(): bool
+    {
+        return $this->responded;
+    }
+
+    /**
      * Returns the data associated with the interaction.
      *
      * @return InteractionData|null
@@ -94,7 +111,7 @@ class Interaction extends Part
         }
 
         $adata = $this->attributes['data'];
-        if (isset($this->attributes['guild_id'])) {
+        if (! isset($adata->guild_id) && isset($this->attributes['guild_id'])) {
             $adata->guild_id = $this->guild_id;
         }
 
@@ -191,8 +208,8 @@ class Interaction extends Part
             return $this->acknowledgeWithResponse();
         }
 
-        if ($this->type != InteractionType::MESSAGE_COMPONENT) {
-            return reject(new \LogicException('You can only acknowledge message component interactions.'));
+        if (! in_array($this->type, [InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+            return reject(new \LogicException('You can only acknowledge message component or modal submit interactions.'));
         }
 
         return $this->respond([
@@ -214,8 +231,8 @@ class Interaction extends Part
      */
     public function acknowledgeWithResponse(bool $ephemeral = false): ExtendedPromiseInterface
     {
-        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT])) {
-            return reject(new \LogicException('You can only acknowledge application command or message component interactions.'));
+        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+            return reject(new \LogicException('You can only acknowledge application command, message component, or modal submit interactions.'));
         }
 
         return $this->respond([
@@ -259,12 +276,14 @@ class Interaction extends Part
      */
     public function getOriginalResponse(): ExtendedPromiseInterface
     {
-        if (! $this->responded) {
-            return reject(new \RuntimeException('Interaction has not been responded to.'));
+        if (! $this->created) {
+            return reject(new \RuntimeException('Interaction has not been created yet.'));
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::ORIGINAL_INTERACTION_RESPONSE, $this->application_id, $this->token))
             ->then(function ($response) {
+                $this->responded = true;
+
                 return $this->factory->create(Message::class, $response, true);
             });
     }
@@ -323,7 +342,7 @@ class Interaction extends Part
      * @see https://discord.com/developers/docs/interactions/receiving-and-responding#create-followup-message
      *
      * @param MessageBuilder $builder   Message to send.
-     * @param bool           $ephemeral Whether the created follow-up should be ephemeral.
+     * @param bool           $ephemeral Whether the created follow-up should be ephemeral. Will be ignored if the respond is previously ephemeral.
      *
      * @throws \RuntimeException
      *
@@ -331,12 +350,12 @@ class Interaction extends Part
      */
     public function sendFollowUpMessage(MessageBuilder $builder, bool $ephemeral = false): ExtendedPromiseInterface
     {
-        if (! $this->responded) {
+        if (! $this->responded && $this->type != InteractionType::MESSAGE_COMPONENT) {
             return reject(new \RuntimeException('Cannot create a follow-up message as the interaction has not been responded to.'));
         }
 
         if ($ephemeral) {
-            $builder->_setFlags(64);
+            $builder->_setFlags(Message::FLAG_EPHEMERAL);
         }
 
         return (function () use ($builder): ExtendedPromiseInterface {
@@ -366,12 +385,12 @@ class Interaction extends Part
      */
     public function respondWithMessage(MessageBuilder $builder, bool $ephemeral = false): ExtendedPromiseInterface
     {
-        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT])) {
-            return reject(new \LogicException('You can only acknowledge application command or message component interactions.'));
+        if (! in_array($this->type, [InteractionType::APPLICATION_COMMAND, InteractionType::MESSAGE_COMPONENT, InteractionType::MODAL_SUBMIT])) {
+            return reject(new \LogicException('You can only acknowledge application command, message component, or modal submit interactions.'));
         }
 
         if ($ephemeral) {
-            $builder->_setFlags(64);
+            $builder->_setFlags(Message::FLAG_EPHEMERAL);
         }
 
         return $this->respond([
@@ -462,12 +481,14 @@ class Interaction extends Part
      */
     public function getFollowUpMessage(string $message_id): ExtendedPromiseInterface
     {
-        if (! $this->responded) {
-            return reject(new \RuntimeException('Interaction has not been responded to.'));
+        if (! $this->created) {
+            return reject(new \RuntimeException('Interaction has not been created yet.'));
         }
 
         return $this->http->get(Endpoint::bind(Endpoint::INTERACTION_FOLLOW_UP, $this->application_id, $this->token, $message_id))
             ->then(function ($response) {
+                $this->responded = true;
+
                 return $this->factory->create(Message::class, $response, true);
             });
     }
@@ -513,5 +534,58 @@ class Interaction extends Part
             'type' => InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
             'data' => ['choices' => $choices],
         ]);
+    }
+
+    /**
+     * Responds to the interaction with a popup modal.
+     *
+     * @see https://discord.com/developers/docs/interactions/receiving-and-responding#responding-to-an-interaction
+     *
+     * @param string            $title      The title of the popup modal, max 45 characters
+     * @param string            $custom_id  A developer-defined identifier for the component, max 100 characters
+     * @param array|Component[] $components Between 1 and 5 (inclusive) components that make up the modal contained in Action Row
+     * @param callable|null     $submit     The function to call once modal is submitted.
+     *
+     * @throws \LogicException
+     * @throws \LengthException
+     *
+     * @return ExtendedPromiseInterface
+     */
+    public function showModal(string $title, string $custom_id, array $components, ?callable $submit = null): ExtendedPromiseInterface
+    {
+        if (in_array($this->type, [InteractionType::PING, InteractionType::MODAL_SUBMIT])) {
+            return reject(new \LogicException('You cannot pop up a modal from a ping or modal submit interaction.'));
+        }
+
+        if (poly_strlen($title) > 45) {
+            return reject(new \LengthException('Modal title must be less than or equal to 45 characters.'));
+        }
+
+        return $this->respond([
+            'type' => InteractionResponseType::MODAL,
+            'data' => [
+                'title' => $title,
+                'custom_id' => $custom_id,
+                'components' => $components,
+            ],
+        ])->then(function ($response) use ($custom_id, $submit) {
+            if ($submit) {
+                $this->discord->once(Event::INTERACTION_CREATE, function (Interaction $interaction) use ($custom_id, $submit) {
+                    if ($interaction->type == InteractionType::MODAL_SUBMIT && $interaction->data->custom_id == $custom_id) {
+                        $components = Collection::for(RequestComponent::class, 'custom_id');
+                        foreach ($interaction->data->components as $actionrow) {
+                            if ($actionrow->type == Component::TYPE_ACTION_ROW) {
+                                foreach ($actionrow->components as $component) {
+                                    $components->pushItem($component);
+                                }
+                            }
+                        }
+                        $submit($interaction, $components);
+                    }
+                });
+            }
+
+            return $response;
+        });
     }
 }

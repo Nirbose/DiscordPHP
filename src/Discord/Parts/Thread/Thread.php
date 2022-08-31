@@ -35,6 +35,7 @@ use Traversable;
  * Represents a Discord thread.
  *
  * @property string            $id                    The ID of the thread.
+ * @property string            $type                  The type of thread.
  * @property string            $guild_id              The ID of the guild which the thread belongs to.
  * @property string            $name                  The name of the thread.
  * @property string            $last_message_id       The ID of the last message sent in the thread.
@@ -42,7 +43,7 @@ use Traversable;
  * @property int               $rate_limit_per_user   Amount of seconds a user has to wait before sending a new message.
  * @property string            $owner_id              The ID of the owner of the thread.
  * @property string            $parent_id             The ID of the channel which the thread was started in.
- * @property int               $message_count         An approximate count of the number of messages sent in the thread. Stops counting at 50.
+ * @property int               $message_count         Number of messages (not including the initial message or deleted messages) in a thread (if the thread was created before July 1, 2022, it stops counting at 50).
  * @property int               $member_count          An approximate count of the number of members in the thread. Stops counting at 50.
  * @property Guild|null        $guild                 The guild which the thread belongs to.
  * @property User|null         $owner                 The owner of the thread.
@@ -50,11 +51,10 @@ use Traversable;
  * @property Channel|null      $parent                The channel which the thread was created in.
  * @property bool              $archived              Whether the thread has been archived.
  * @property bool              $locked                Whether the thread has been locked.
- * @property int               $auto_archive_duration The number of minutes of inactivity until the thread is automatically archived.
- * @property string|null       $archiver_id           The ID of the user that archived the thread, if any.
- * @property User|null         $archiver              The user that archived the thread, if any.
- * @property Member|null       $archiver_member       The corresponding member object for the user that archived the thread, if any.
+ * @property int|null          $auto_archive_duration The number of minutes of inactivity until the thread is automatically archived.
+ * @property int|null          $flags                 Channel flags combined as a bitfield. `PINNED` can only be set for threads in forum channels.
  * @property Carbon            $archive_timestamp     The time that the thread's archive status was changed.
+ * @property int|null          $total_message_sent    Number of messages ever sent in a thread, it's similar to `message_count` on message creation, but will not decrement the number when a message is deleted.
  * @property MessageRepository $messages              Repository of messages sent in the thread.
  * @property MemberRepository  $members               Repository of members in the thread.
  *
@@ -68,6 +68,7 @@ class Thread extends Part
      */
     protected $fillable = [
         'id',
+        'type',
         'guild_id',
         'name',
         'last_message_id',
@@ -78,6 +79,8 @@ class Thread extends Part
         'message_count',
         'member_count',
         'thread_metadata',
+        'flags',
+        'total_message_sent',
     ];
 
     /**
@@ -89,12 +92,10 @@ class Thread extends Part
         'owner_member',
         'parent',
         'archived',
-        'locked',
         'auto_archive_duration',
-        'archiver_id',
-        'archiver',
-        'archiver_member',
         'archive_timestamp',
+        'locked',
+        'invitable',
     ];
 
     /**
@@ -174,7 +175,7 @@ class Thread extends Part
      */
     protected function getArchivedAttribute(): bool
     {
-        return $this->thread_metadata->archived;
+        return $this->thread_metadata->archived ?? false;
     }
 
     /**
@@ -188,18 +189,30 @@ class Thread extends Part
     }
 
     /**
+     * Returns whether the thread is archived.
+     *
+     * @return bool|null
+     */
+    protected function getInvitableAttribute(): ?bool
+    {
+        return $this->thread_metadata->invitable;
+    }
+
+    /**
      * Returns the number of minutes of inactivity required for the thread
      * to auto archive.
      *
-     * @return int
+     * @return int|null
      */
-    protected function getAutoArchiveDurationAttribute(): int
+    protected function getAutoArchiveDurationAttribute(): ?int
     {
         return $this->thread_metadata->auto_archive_duration;
     }
 
     /**
      * Returns the ID of the user who archived the thread.
+     *
+     * @deprecated 7.1.0 Removed from API
      *
      * @return string|null
      */
@@ -209,7 +222,39 @@ class Thread extends Part
     }
 
     /**
+     * Set whether the thread is archived.
+     *
+     * @param bool $value
+     */
+    protected function setArchivedAttribute(bool $value)
+    {
+        $this->attributes['thread_metadata']->archived = $value;
+    }
+
+    /**
+     * Set whether the thread is locked.
+     *
+     * @param bool $value
+     */
+    protected function setLockedAttribute(bool $value)
+    {
+        $this->attributes['thread_metadata']->locked = $value;
+    }
+
+    /**
+     * Set the number of minutes of inactivity required for the thread to auto archive.
+     *
+     * @param int $value
+     */
+    protected function setAutoArchiveDurationAttribute(int $value)
+    {
+        $this->attributes['thread_metadata']->auto_archive_duration = $value;
+    }
+
+    /**
      * Returns the user who archived the thread.
+     *
+     * @deprecated 7.1.0 Removed from API
      *
      * @return User|null
      */
@@ -224,6 +269,8 @@ class Thread extends Part
 
     /**
      * Returns the member object for the user who archived the thread.
+     *
+     * @deprecated 7.1.0 Removed from API
      *
      * @return Member|null
      */
@@ -312,23 +359,93 @@ class Thread extends Part
     }
 
     /**
+     * Rename the thread.
+     *
+     * @param string      $name   New thread name.
+     * @param string|null $reason Reason for Audit Log.
+     *
+     * @return ExtendedPromiseInterface<Thread>
+     */
+    public function rename(string $name, ?string $reason = null): ExtendedPromiseInterface
+    {
+        $headers = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
+        }
+
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['name' => $name], $headers)
+            ->then(function ($response) {
+                $this->attributes['name'] = $response->name;
+
+                return $this;
+            });
+    }
+
+    /**
      * Archive the thread.
      *
-     * @return ExtendedPromiseInterface
+     * @param string|null $reason Reason for Audit Log.
+     *
+     * @return ExtendedPromiseInterface<Thread>
      */
-    public function archive(): ExtendedPromiseInterface
+    public function archive(?string $reason = null): ExtendedPromiseInterface
     {
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => true]);
+        $headers = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
+        }
+
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => true], $headers)
+            ->then(function ($response) {
+                $this->archived = $response->thread_metadata->archived;
+
+                return $this;
+            });
     }
 
     /**
      * Unarchive the thread.
      *
-     * @return ExtendedPromiseInterface
+     * @param string|null $reason Reason for Audit Log.
+     *
+     * @return ExtendedPromiseInterface<Thread>
      */
-    public function unarchive(): ExtendedPromiseInterface
+    public function unarchive(?string $reason = null): ExtendedPromiseInterface
     {
-        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => false]);
+        $headers = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
+        }
+
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['archived' => false], $headers)
+            ->then(function ($response) {
+                $this->archived = $response->thread_metadata->archived;
+
+                return $this;
+            });
+    }
+
+    /**
+     * Set auto archive duration of the thread.
+     *
+     * @param int         $duration Duration in minutes.
+     * @param string|null $reason   Reason for Audit Log.
+     *
+     * @return ExtendedPromiseInterface<Thread>
+     */
+    public function setAutoArchiveDuration(int $duration, ?string $reason = null): ExtendedPromiseInterface
+    {
+        $headers = [];
+        if (isset($reason)) {
+            $headers['X-Audit-Log-Reason'] = $reason;
+        }
+
+        return $this->http->patch(Endpoint::bind(Endpoint::THREAD, $this->id), ['auto_archive_duration' => $duration], $headers)
+            ->then(function ($response) {
+                $this->auto_archive_duration = $response->thread_metadata->auto_archive_duration;
+
+                return $this;
+            });
     }
 
     /**
@@ -349,7 +466,7 @@ class Thread extends Part
                         $message = $this->factory->create(Message::class, $response, true);
                     }
 
-                    $messages->push($message);
+                    $messages->pushItem($message);
                 }
 
                 return $messages;
@@ -459,10 +576,10 @@ class Thread extends Part
             foreach ($responses as $response) {
                 if (! $message = $this->messages->get('id', $response->id)) {
                     $message = $this->factory->create(Message::class, $response, true);
-                    $this->messages->push($message);
+                    $this->messages->pushItem($message);
                 }
 
-                $messages->push($message);
+                $messages->pushItem($message);
             }
 
             return $messages;
@@ -631,7 +748,7 @@ class Thread extends Part
             $filterResult = call_user_func_array($filter, [$message]);
 
             if ($filterResult) {
-                $messages->push($message);
+                $messages->pushItem($message);
 
                 if ($options['limit'] !== false && sizeof($messages) >= $options['limit']) {
                     $this->discord->removeListener(Event::MESSAGE_CREATE, $eventHandler);
@@ -654,6 +771,46 @@ class Thread extends Part
         }
 
         return $deferred->promise();
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function getCreatableAttributes(): array
+    {
+        $attr = [
+            'name' => $this->name,
+            'auto_archive_duration' => $this->auto_archive_duration,
+            'type' => $this->type,
+            'rate_limit_per_user' => $this->rate_limit_per_user,
+        ];
+
+        if ($this->type == Channel::TYPE_PRIVATE_THREAD) {
+            $attr['invitable'] = $this->invitable;
+        }
+
+        return $attr;
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function getUpdatableAttributes(): array
+    {
+        $attr = [
+            'name' => $this->name,
+            'rate_limit_per_user' => $this->rate_limit_per_user,
+            'archived' => $this->archived,
+            'auto_archive_duration' => $this->auto_archive_duration,
+            'locked' => $this->locked,
+            'flags' => $this->flags,
+        ];
+
+        if ($this->type == Channel::TYPE_PRIVATE_THREAD) {
+            $attr['invitable'] = $this->invitable;
+        }
+
+        return $attr;
     }
 
     /**

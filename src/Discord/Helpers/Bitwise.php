@@ -12,15 +12,16 @@
 namespace Discord\Helpers;
 
 /**
- * Polyfill to handle bitwise operation in 32 bit php using ext-gmp
+ * Polyfill to handle bitwise operation in 32 bit php using ext-gmp.
  */
 class Bitwise
 {
     private static bool $is_32_gmp = false;
 
     /**
-     * Run a single check whether the GMP extension is loaded, internally used
-     * during Discord class construct
+     * Run a single check whether the GMP extension is loaded.
+     *
+     * @internal internally used during Discord class construct.
      *
      * @return bool true if GMP extension is loaded
      */
@@ -89,7 +90,7 @@ class Bitwise
             return \gmp_sub(\gmp_neg(self::floatCast($a)), 1);
         }
 
-        return ~ $a;
+        return ~$a;
     }
 
     /**
@@ -148,6 +149,7 @@ class Bitwise
         if (self::$is_32_gmp) {
             $gmp = \gmp_init(self::floatCast($a));
             \gmp_setbit($gmp, $b);
+
             return $gmp;
         }
 
@@ -166,7 +168,9 @@ class Bitwise
     public static function floatCast($value)
     {
         // Discard non float
-        if (! is_float($value)) return $value;
+        if (! is_float($value)) {
+            return $value;
+        }
 
         $currentLocale = setlocale(LC_NUMERIC, '0');
         setlocale(LC_NUMERIC, 'C');

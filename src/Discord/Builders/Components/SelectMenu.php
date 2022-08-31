@@ -20,6 +20,10 @@ use React\Promise\PromiseInterface;
 use function Discord\poly_strlen;
 
 /**
+ * Select menus are another interactive component that renders on messages.
+ * On desktop, clicking on a select menu opens a dropdown-style UI
+ * On mobile, tapping a select menu opens up a half-sheet with the options.
+ *
  * @see https://discord.com/developers/docs/interactions/message-components#select-menus
  */
 class SelectMenu extends Component
@@ -39,7 +43,7 @@ class SelectMenu extends Component
     private $options = [];
 
     /**
-     * Placeholder string to display if nothing is selected. Maximum 100 characters.
+     * Placeholder string to display if nothing is selected. Maximum 150 characters.
      *
      * @var string|null
      */
@@ -84,19 +88,19 @@ class SelectMenu extends Component
 
     /**
      * Creates a new select menu.
-     * 
+     *
      * @param string|null $custom_id The custom ID of the select menu. If not given, an UUID will be used
      */
     public function __construct(?string $custom_id)
     {
-        $this->setCustomId($custom_id ?? $this->generateUuid()); 
+        $this->setCustomId($custom_id ?? $this->generateUuid());
     }
 
     /**
      * Creates a new select menu.
      *
      * @param string|null $custom_id The custom ID of the select menu.
-     * 
+     *
      * @return self
      */
     public static function new(?string $custom_id = null): self
@@ -105,8 +109,8 @@ class SelectMenu extends Component
     }
 
     /**
-     * Sets the custom ID for the select menu
-     * 
+     * Sets the custom ID for the select menu.
+     *
      * @param string $custom_id
      *
      * @throws \LengthException
@@ -172,7 +176,7 @@ class SelectMenu extends Component
 
     /**
      * Sets the placeholder string to display if nothing is selected.
-     * Maximum 100 characters. Null to clear placeholder.
+     * Maximum 150 characters. Null to clear placeholder.
      *
      * @param string|null $placeholder
      *
@@ -182,8 +186,8 @@ class SelectMenu extends Component
      */
     public function setPlaceholder(?string $placeholder): self
     {
-        if (isset($placeholder) && strlen($placeholder) > 100) {
-            throw new \LengthException('Placeholder string must be less than or equal to 100 characters.');
+        if (isset($placeholder) && poly_strlen($placeholder) > 150) {
+            throw new \LengthException('Placeholder string must be less than or equal to 150 characters.');
         }
 
         $this->placeholder = $placeholder;
@@ -289,7 +293,7 @@ class SelectMenu extends Component
                 
                 foreach ($this->options as $option) {
                     if (in_array($option->getValue(), $interaction->data->values)) {
-                        $options->push($option);
+                        $options->pushItem($option);
                     }
                 }
 

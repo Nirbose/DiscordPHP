@@ -9,11 +9,12 @@
  * with this source code in the LICENSE.md file.
  */
 
-namespace Discord\Parts\Guild;
+namespace Discord\Parts\Channel;
 
 use Carbon\Carbon;
 use Discord\Http\Endpoint;
-use Discord\Parts\Channel\Channel;
+use Discord\Parts\Guild\Guild;
+use Discord\Parts\Guild\ScheduledEvent;
 use Discord\Parts\Part;
 use Discord\Parts\User\User;
 use React\Promise\ExtendedPromiseInterface;
@@ -35,7 +36,6 @@ use React\Promise\ExtendedPromiseInterface;
  * @property int|null            $approximate_presence_count Approximate count of online members, returned from the GET /invites/<code> endpoint when with_counts is true.
  * @property int|null            $approximate_member_count   Approximate count of total members, returned from the GET /invites/<code> endpoint when with_counts is true.
  * @property Carbon|null         $expires_at                 The expiration date of this invite, returned from the GET /invites/<code> endpoint when with_expiration is true.
- * @property object|null         $stage_instance             Stage instance data if there is a public Stage instance in the Stage channel this invite is for.
  * @property ScheduledEvent|null $guild_scheduled_event      Guild scheduled event data, only included if guild_scheduled_event_id contains a valid guild scheduled event id.
  * @property int                 $uses                       How many times the invite has been used.
  * @property int                 $max_uses                   How many times the invite can be used.
@@ -59,7 +59,7 @@ class Invite extends Part
         'approximate_presence_count',
         'approximate_member_count',
         'expires_at',
-        'stage_instance',
+        'stage_instance', // deprecated
         'guild_scheduled_event',
 
         // Extra metadata
@@ -79,6 +79,8 @@ class Invite extends Part
 
     /**
      * Accepts the invite.
+     *
+     * @deprecated 7.0.6
      *
      * @return ExtendedPromiseInterface
      */
@@ -154,9 +156,9 @@ class Invite extends Part
      *
      * @throws \Exception
      *
-     * @return Channel    The Channel that you have been invited to.
+     * @return Channel The Channel that you have been invited to.
      */
-    protected function getChannelAttribute(): ?Channel
+    protected function getChannelAttribute(): Channel
     {
         if (isset($this->attributes['channel_id']) && $channel = $this->discord->getChannel($this->attributes['channel_id'])) {
             return $channel;
@@ -204,7 +206,7 @@ class Invite extends Part
      *
      * @throws \Exception
      *
-     * @return Carbon     The time that the invite was created.
+     * @return Carbon The time that the invite was created.
      */
     protected function getCreatedAtAttribute(): Carbon
     {
@@ -216,7 +218,7 @@ class Invite extends Part
      *
      * @throws \Exception
      *
-     * @return User|null  The user whose stream to display for this voice channel stream invite.
+     * @return User|null The user whose stream to display for this voice channel stream invite.
      */
     protected function getTargetUserAttribute(): ?User
     {

@@ -16,7 +16,7 @@ use Discord\Discord;
 use Discord\Helpers\Collection;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
-use Discord\Parts\Guild\Invite;
+use Discord\Parts\Channel\Invite;
 
 /**
  * @covers \Discord\Parts\Channel\Channel
@@ -266,7 +266,7 @@ final class ChannelTest extends DiscordTestCase
     /**
      * @covers \Discord\Parts\Channel\Channel::allowVoice
      */
-    public function testVoiceChannelDoesNotAllowText()
+    public function testVoiceChannelAllowVoice()
     {
         /**
          * @var Channel
@@ -275,7 +275,6 @@ final class ChannelTest extends DiscordTestCase
             return $channel->type == Channel::TYPE_VOICE;
         })->first();
 
-        $this->assertFalse($vc->allowText());
         $this->assertTrue($vc->allowVoice());
     }
 }

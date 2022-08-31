@@ -11,12 +11,16 @@
 
 namespace Discord;
 
+use ArrayIterator;
+use Discord\Helpers\Deferred;
 use Discord\Parts\Channel\Channel;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Role;
 use Discord\Parts\Part;
 use Discord\Parts\User\Member;
 use Discord\Parts\User\User;
+use React\EventLoop\LoopInterface;
+use React\Promise\ExtendedPromiseInterface;
 use Symfony\Component\OptionsResolver\Options;
 
 /**
@@ -196,9 +200,9 @@ function imageToBase64(string $filepath): string
  * Takes a snowflake and calculates the time that the snowflake
  * was generated.
  *
- * @param string|int $snowflake
+ * @param string|float $snowflake
  *
- * @return int
+ * @return float
  */
 function getSnowflakeTimestamp(string $snowflake)
 {
@@ -250,11 +254,48 @@ function normalizePartId($id_field = 'id')
  * _Italics_, **Bold**, __Underline__, ~~Strikethrough~~, ||spoiler||
  * `Code`, ```Code block```, > Quotes, >>> Block quotes
  * #Channel @User
- * A backslash will be added before the each formatting symbol
- * 
+ * A backslash will be added before the each formatting symbol.
+ *
  * @return string the escaped string unformatted as plain text
  */
 function escapeMarkdown(string $text): string
 {
     return addcslashes($text, '#*:>@_`|~');
+}
+
+/**
+ * Run a deferred search in array.
+ *
+ * @param array|object  $array     Traversable, use $collection->getIterator() if searching in Collection
+ * @param callable      $callback  The filter function to run
+ * @param LoopInterface $loop      Loop interface, use $discord->getLoop()
+ * @param callable      $canceller The function to cancel the search
+ *
+ * @return ExtendedPromiseInterface
+ */
+function deferFind($array, callable $callback, $loop, ?callable $canceller = null): ExtendedPromiseInterface
+{
+    $deferred = new Deferred($canceller);
+    $iterator = new ArrayIterator($array);
+
+    $loop->addPeriodicTimer(0.001, function ($timer) use ($loop, $deferred, $iterator, $callback) {
+        if (! $iterator->valid()) {
+            $loop->cancelTimer($timer);
+            $deferred->reject();
+
+            return;
+        }
+
+        $current = $iterator->current();
+        if ($callback($current)) {
+            $loop->cancelTimer($timer);
+            $deferred->resolve($current);
+
+            return;
+        }
+
+        $iterator->next();
+    });
+
+    return $deferred->promise();
 }

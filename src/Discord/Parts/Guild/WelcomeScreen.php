@@ -15,7 +15,7 @@ use Discord\Helpers\Collection;
 use Discord\Parts\Part;
 
 /**
- * A Welcome Screen of a Guild
+ * A Welcome Screen of a Guild.
  *
  * @see https://discord.com/developers/docs/resources/guild#welcome-screen-object-welcome-screen-structure
  *
@@ -30,16 +30,16 @@ class WelcomeScreen extends Part
     protected $fillable = ['description', 'welcome_channels'];
 
     /**
-     * Returns the Welcome Channels of the Welcome Screen
+     * Returns the Welcome Channels of the Welcome Screen.
      *
      * @return Collection|WelcomeChannel[] The channels of welcome screen.
      */
     protected function getWelcomeChannelsAttribute(): Collection
     {
-        $collection = Collection::for(WelcomeChannel::class, 'channel_id');
+        $collection = Collection::for(WelcomeChannel::class, null);
 
         foreach ($this->attributes['welcome_channels'] ?? [] as $welcome_channel) {
-            $collection->push($this->factory->part(WelcomeChannel::class, (array) $welcome_channel, true));
+            $collection->pushItem($this->factory->part(WelcomeChannel::class, (array) $welcome_channel, true));
         }
 
         return $collection;

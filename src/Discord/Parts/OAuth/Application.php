@@ -32,7 +32,6 @@ use Discord\Repository\Interaction\GlobalCommandRepository;
  * @property string|null             $terms_of_service_url   The url of the app's terms of service.
  * @property string|null             $privacy_policy_url     The url of the app's privacy policy
  * @property User|null               $owner                  The owner of the OAuth application.
- * @property string                  $summary                If this application is a game sold on Discord, this field will be the summary field for the store page of its primary sku.
  * @property string                  $verify_key             The hex encoded key for verification in interactions and the GameSDK's GetTicket.
  * @property object|null             $team                   If the application belongs to a team, this will be a list of the members of that team.
  * @property string|null             $guild_id               If this application is a game sold on Discord, this field will be the guild to which it has been linked.
@@ -41,6 +40,9 @@ use Discord\Repository\Interaction\GlobalCommandRepository;
  * @property string|null             $cover_image            The application's default rich presence invite cover image URL.
  * @property string|null             $cover_image_hash       The application's default rich presence invite cover image hash.
  * @property int                     $flags                  The application's public flags.
+ * @property string[]|null           $tags                   Up to 5 tags describing the content and functionality of the application.
+ * @property object|null             $install_params         Settings for the application's default in-app authorization link, if enabled.
+ * @property string|null             $custom_install_url     The application's default custom authorization link, if enabled.
  * @property string                  $invite_url             The invite URL to invite the bot to a guild.
  * @property GlobalCommandRepository $commands               The application global commands.
  */
@@ -61,13 +63,16 @@ class Application extends Part
         'owner',
         'primary_sku_id',
         'slug',
-        'summary',
+        'summary', // deprecated, is now empty, used to be same as description
         'team',
         'verify_key',
         'rpc_origins',
         'terms_of_service_url',
         'privacy_policy_url',
         'flags',
+        'tags',
+        'install_params',
+        'custom_install_url',
     ];
 
     public const GATEWAY_PRESENCE = (1 << 12);
@@ -78,6 +83,7 @@ class Application extends Part
     public const EMBEDDED = (1 << 17);
     public const GATEWAY_MESSAGE_CONTENT = (1 << 18);
     public const GATEWAY_MESSAGE_CONTENT_LIMITED = (1 << 19);
+    public const APPLICATION_COMMAND_BADGE = (1 << 23);
 
     /**
      * @inheritdoc

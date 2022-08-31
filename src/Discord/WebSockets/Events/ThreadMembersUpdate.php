@@ -15,6 +15,9 @@ use Discord\Helpers\Deferred;
 use Discord\Parts\Thread\Member;
 use Discord\WebSockets\Event;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#thread-members-update
+ */
 class ThreadMembersUpdate extends Event
 {
     public function handle(Deferred &$deferred, $data)
@@ -37,7 +40,7 @@ class ThreadMembersUpdate extends Event
                 if ($data->added_members ?? null) {
                     foreach ($data->added_members as $member) {
                         $member = $this->factory->create(Member::class, $member, true);
-                        $thread->members->push($member);
+                        $thread->members->pushItem($member);
                     }
                 }
 

@@ -17,14 +17,14 @@ use Discord\Parts\Part;
 use Discord\Parts\User\User;
 
 /**
- * An Integration is a guild integrations for Twitch, Youtube, Bot and Apps
+ * An Integration is a guild integrations for Twitch, Youtube, Bot and Apps.
  *
  * @see https://discord.com/developers/docs/resources/guild#integration-object
  *
  * @property string           $id                  Integration id.
  * @property string           $name                Integration name.
  * @property string           $type                Integration type (twitch, youtube, or discord).
- * @property bool             $enabled             Is this integration enabled?
+ * @property bool|null        $enabled             Is this integration enabled?
  * @property bool|null        $syncing             Is this integration syncing?
  * @property string|null      $role_id             Id that this integration uses for "subscribers".
  * @property Role|null        $role                Role that this integration uses for "subscribers".
@@ -100,6 +100,8 @@ class Integration extends Part
     /**
      * Returns the application attribute.
      *
+     * @todo return correct Application structure https://discord.com/developers/docs/resources/guild#integration-application-object
+     *
      * @return Application|null
      */
     protected function getApplicationAttribute(): ?Application
@@ -113,6 +115,7 @@ class Integration extends Part
         }
 
         $application = $this->factory->part(Application::class, (array) $this->attributes['application'], true);
+
         return $application;
     }
 

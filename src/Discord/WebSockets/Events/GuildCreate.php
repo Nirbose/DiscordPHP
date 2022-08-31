@@ -21,9 +21,14 @@ use Discord\Parts\WebSockets\VoiceStateUpdate as VoiceStateUpdatePart;
 use Discord\WebSockets\Event;
 use Discord\Helpers\Deferred;
 use Discord\Http\Endpoint;
+use Discord\Parts\Channel\StageInstance;
+use Discord\Parts\Guild\ScheduledEvent;
 use Discord\Parts\Thread\Member as ThreadMember;
 use Discord\Parts\Thread\Thread;
 
+/**
+ * @see https://discord.com/developers/docs/topics/gateway#guild-create
+ */
 class GuildCreate extends Event
 {
     /**
@@ -99,10 +104,26 @@ class GuildCreate extends Event
                 $member['user_id'] = $this->discord->id;
 
                 $selfMember = $this->factory->create(ThreadMember::class, $member, true);
-                $thread->members->push($selfMember);
+                $thread->members->pushItem($selfMember);
             }
 
-            $guildPart->channels->get('id', $thread->parent_id)->threads->push($thread);
+            $guildPart->channels->get('id', $thread->parent_id)->threads->pushItem($thread);
+        }
+
+        foreach ($data->stage_instances as $stageInstance) {
+            $stageInstance->guild_id = $data->id;
+            /** @var StageInstance */
+            $stageInstancePart = $this->factory->create(StageInstance::class, $stageInstance, true);
+
+            $guildPart->stage_instances->offsetSet($stageInstancePart->id, $stageInstancePart);
+        }
+
+        foreach ($data->guild_scheduled_events as $scheduledEvent) {
+            $scheduledEvent->guild_id = $data->id;
+            /** @var ScheduledEvent */
+            $scheduledEventPart = $this->factory->create(ScheduledEvent::class, $scheduledEvent, true);
+
+            $guildPart->guild_scheduled_events->offsetSet($scheduledEventPart->id, $scheduledEventPart);
         }
 
         $resolve = function () use (&$guildPart, $deferred) {
@@ -116,18 +137,31 @@ class GuildCreate extends Event
         };
 
         if ($this->discord->options['retrieveBans']) {
-            $this->http->get(Endpoint::bind(Endpoint::GUILD_BANS, $guildPart->id))->done(function ($rawBans) use (&$guildPart, $resolve) {
-                foreach ($rawBans as $ban) {
-                    $ban = (array) $ban;
-                    $ban['guild'] = $guildPart;
-
-                    $banPart = $this->factory->create(Ban::class, $ban, true);
-
-                    $guildPart->bans->offsetSet($banPart->id, $banPart);
+            $banPagination = function ($lastUserId = null) use (&$banPagination, $guildPart, $resolve) {
+                $bind = Endpoint::bind(Endpoint::GUILD_BANS, $guildPart->id);
+                if (isset($lastUserId)) {
+                    $bind->addQuery('after', $lastUserId);
                 }
+                $this->http->get($bind)->done(function ($rawBans) use (&$banPagination, $guildPart, $resolve) {
+                    if (empty($rawBans)) {
+                        $resolve();
 
-                $resolve();
-            }, $resolve);
+                        return;
+                    }
+
+                    foreach ($rawBans as $ban) {
+                        $ban = (array) $ban;
+                        $ban['guild_id'] = $guildPart->id;
+
+                        $banPart = $this->factory->create(Ban::class, $ban, true);
+
+                        $guildPart->bans->offsetSet($banPart->user->id, $banPart);
+                    }
+
+                    $banPagination($guildPart->bans->last()->user->id);
+                }, $resolve);
+            };
+            $banPagination();
         } else {
             $resolve();
         }

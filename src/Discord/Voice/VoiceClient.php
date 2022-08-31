@@ -28,7 +28,6 @@ use React\Datagram\Socket;
 use React\Dns\Resolver\Factory as DNSFactory;
 use React\EventLoop\LoopInterface;
 use Discord\Helpers\Deferred;
-use Exception;
 use Psr\Log\LoggerInterface;
 use React\ChildProcess\Process;
 use React\Promise\ExtendedPromiseInterface;
@@ -36,7 +35,6 @@ use React\Stream\ReadableResourceStream as Stream;
 use React\EventLoop\TimerInterface;
 use React\Stream\ReadableResourceStream;
 use React\Stream\ReadableStreamInterface;
-use RuntimeException;
 
 /**
  * The Discord voice client.
@@ -49,6 +47,13 @@ class VoiceClient extends EventEmitter
      * @var string The DCA version.
      */
     public const DCA_VERSION = 'DCA1';
+
+    /**
+     * The Opus Silence Frame.
+     *
+     * @var string The silence frame.
+     */
+    public const SILENCE_FRAME = "\xF8\xFF\xFE";
 
     /**
      * Is the voice client ready?
@@ -198,13 +203,6 @@ class VoiceClient extends EventEmitter
     protected $speaking = false;
 
     /**
-     * Should we stop the current playing audio?
-     *
-     * @var bool Whether we should stop the current playing audio.
-     */
-    protected $stopAudio = false;
-
-    /**
      * Whether we are set as mute.
      *
      * @var bool Whether we are set as mute.
@@ -319,6 +317,34 @@ class VoiceClient extends EventEmitter
     protected $version = 4;
 
     /**
+     * The Config for DNS Resolver.
+     *
+     * @var string|\React\Dns\Config\Config
+     */
+    protected $dnsConfig;
+
+    /**
+     * Silence Frame Remain Count.
+     *
+     * @var int Amount of silence frames remaining.
+     */
+    protected $silenceRemaining = 5;
+
+    /**
+     * readopus Timer.
+     *
+     * @var TimerInterface Timer
+     */
+    protected $readOpusTimer;
+
+    /**
+     * Audio Buffer.
+     *
+     * @var Buffer The Audio Buffer
+     */
+    protected $buffer;
+
+    /**
      * Constructs the Voice Client instance.
      *
      * @param WebSocket       $websocket The main WebSocket client.
@@ -338,6 +364,7 @@ class VoiceClient extends EventEmitter
         $this->mute = $data['mute'];
         $this->endpoint = str_replace([':80', ':443'], '', $data['endpoint']);
         $this->speakingStatus = new Collection([], 'ssrc');
+        $this->dnsConfig = $data['dnsConfig'];
     }
 
     /**
@@ -385,7 +412,7 @@ class VoiceClient extends EventEmitter
     {
         $this->logger->debug('connected to voice websocket');
 
-        $resolver = (new DNSFactory())->createCached('8.8.8.8', $this->loop);
+        $resolver = (new DNSFactory())->createCached($this->dnsConfig, $this->loop);
         $udpfac = new DatagramFactory($this->loop, $resolver);
 
         $this->voiceWebsocket = $ws;
@@ -419,7 +446,7 @@ class VoiceClient extends EventEmitter
 
                     $this->udpHeartbeat = $this->loop->addPeriodicTimer(5, function () use ($client) {
                         $buffer = new Buffer(9);
-                        $buffer[0] = pack('c', 0xC9);
+                        $buffer[0] = "\xC9";
                         $buffer->writeUInt64LE($this->heartbeatSeq, 1);
                         ++$this->heartbeatSeq;
 
@@ -485,17 +512,6 @@ class VoiceClient extends EventEmitter
                     $end = microtime(true);
                     $start = $data->d;
                     $diff = ($end - $start) * 1000;
-
-                    // dont know what this is
-                    // dynamic frame size obviously
-                    // doesnt work
-                    // if ($diff <= 10) { // set to 20ms
-                    //     $this->setFrameSize(20);
-                    // } elseif ($diff <= 20) { // set to 40ms
-                    //     $this->setFrameSize(40);
-                    // } else { // set to 60ms
-                    //     $this->setFrameSize(60);
-                    // }
 
                     $this->logger->debug('received heartbeat ack', ['response_time' => $diff]);
                     $this->emit('ws-ping', [$diff]);
@@ -680,6 +696,12 @@ class VoiceClient extends EventEmitter
             return $deferred->promise();
         }
 
+        if ($this->speaking) {
+            $deferred->reject(new \Exception('Audio already playing.'));
+
+            return $deferred->promise();
+        }
+
         $process = $this->dcaEncode($file, $channels);
         $process->start($this->loop);
 
@@ -701,6 +723,12 @@ class VoiceClient extends EventEmitter
 
         if (! $this->ready) {
             $deferred->reject(new \Exception('Voice Client is not ready.'));
+
+            return $deferred->promise();
+        }
+
+        if ($this->speaking) {
+            $deferred->reject(new \Exception('Audio already playing.'));
 
             return $deferred->promise();
         }
@@ -736,7 +764,13 @@ class VoiceClient extends EventEmitter
         $deferred = new Deferred();
 
         if (! $this->isReady()) {
-            $deferred->reject(new Exception('Voice client is not ready yet.'));
+            $deferred->reject(new \Exception('Voice client is not ready yet.'));
+
+            return $deferred->promise();
+        }
+
+        if ($this->speaking) {
+            $deferred->reject(new \Exception('Audio already playing.'));
 
             return $deferred->promise();
         }
@@ -758,38 +792,32 @@ class VoiceClient extends EventEmitter
         }
 
         if (! ($stream instanceof ReadableStreamInterface)) {
-            $deferred->reject(new Exception('The stream passed to playDCAStream was not an instance of resource, ReactPHP Process, ReactPHP Readable Stream'));
+            $deferred->reject(new \Exception('The stream passed to playDCAStream was not an instance of resource, ReactPHP Process, ReactPHP Readable Stream'));
 
             return $deferred->promise();
         }
 
-        $buffer = new RealBuffer($this->loop);
-        $stream->on('data', function ($d) use ($buffer) {
-            $buffer->write($d);
+        $this->buffer = new RealBuffer($this->loop);
+        $stream->on('data', function ($d) {
+            $this->buffer->write($d);
         });
 
-        $count = 0;
-        $readOpus = function () use ($buffer, $deferred, &$readOpus, &$count) {
+        $readOpus = function () use ($deferred, &$readOpus) {
+            $this->readOpusTimer = null;
+
             // If the client is paused, delay by frame size and check again.
             if ($this->isPaused) {
-                $this->loop->addTimer($this->frameSize / 1000, $readOpus);
-
-                return;
-            }
-
-            if ($this->stopAudio) {
-                $this->reset();
-                $deferred->resolve();
+                $this->insertSilence();
+                $this->readOpusTimer = $this->loop->addTimer($this->frameSize / 1000, $readOpus);
 
                 return;
             }
 
             // Read opus length
-            $buffer->readInt16(1000)->then(function ($opusLength) use ($buffer) {
+            $this->buffer->readInt16(1000)->then(function ($opusLength) {
                 // Read opus data
-                return $buffer->read($opusLength, null, 1000);
-            })->then(function ($opus) use (&$readOpus, &$count) {
-                ++$count;
+                return $this->buffer->read($opusLength, null, 1000);
+            })->then(function ($opus) use (&$readOpus) {
                 $this->sendBuffer($opus);
 
                 // increment sequence
@@ -804,9 +832,8 @@ class VoiceClient extends EventEmitter
                     $this->timestamp = 0;
                 }
 
-                $this->loop->addTimer(($this->frameSize - 1) / 1000, $readOpus);
+                $this->readOpusTimer = $this->loop->addTimer(($this->frameSize - 1) / 1000, $readOpus);
             }, function () use ($deferred) {
-                $this->setSpeaking(false);
                 $this->reset();
                 $deferred->resolve();
             });
@@ -815,16 +842,16 @@ class VoiceClient extends EventEmitter
         $this->setSpeaking(true);
 
         // Read magic byte header
-        $buffer->read(4)->then(function ($mb) use ($buffer) {
+        $this->buffer->read(4)->then(function ($mb) {
             if ($mb !== self::DCA_VERSION) {
                 throw new OutdatedDCAException('The DCA magic byte header was not correct.');
             }
 
             // Read JSON length
-            return $buffer->readInt32();
-        })->then(function ($jsonLength) use ($buffer) {
+            return $this->buffer->readInt32();
+        })->then(function ($jsonLength) {
             // Read JSON content
-            return $buffer->read($jsonLength);
+            return $this->buffer->read($jsonLength);
         })->then(function ($metadata) use ($readOpus) {
             $metadata = json_decode($metadata, true);
 
@@ -833,7 +860,7 @@ class VoiceClient extends EventEmitter
             }
 
             $this->startTime = microtime(true) + 0.5;
-            $this->loop->addTimer(0.5, $readOpus);
+            $this->readOpusTimer = $this->loop->addTimer(0.5, $readOpus);
         });
 
         return $deferred->promise();
@@ -842,13 +869,20 @@ class VoiceClient extends EventEmitter
     /**
      * Resets the voice client.
      */
-    private function reset()
+    private function reset(): void
     {
+        if ($this->readOpusTimer) {
+            $this->loop->cancelTimer($this->readOpusTimer);
+            $this->readOpusTimer = null;
+        }
+
         $this->setSpeaking(false);
         $this->seq = 0;
         $this->timestamp = 0;
         $this->streamTime = 0;
         $this->startTime = 0;
+        $this->isPaused = false;
+        $this->silenceRemaining = 5;
     }
 
     /**
@@ -952,8 +986,8 @@ class VoiceClient extends EventEmitter
      */
     public function setBitrate(int $bitrate): void
     {
-        if ($bitrate > 128000 || $bitrate < 8000) {
-            throw new \InvalidArgumentException("{$bitrate} is not a valid option. The bitrate must be between 8,000bpm and 128,000bpm.");
+        if ($bitrate > 384000 || $bitrate < 8000) {
+            throw new \InvalidArgumentException("{$bitrate} is not a valid option. The bitrate must be between 8,000 bps and 384,000 bps.");
         }
 
         if ($this->speaking) {
@@ -1065,6 +1099,7 @@ class VoiceClient extends EventEmitter
         }
 
         $this->isPaused = true;
+        $this->silenceRemaining = 5;
     }
 
     /**
@@ -1085,15 +1120,13 @@ class VoiceClient extends EventEmitter
      */
     public function stop(): void
     {
-        if ($this->stopAudio) {
-            throw new \Exception('Audio is already being stopped.');
-        }
-
         if (! $this->speaking) {
             throw new \Exception('Audio must be playing to stop it.');
         }
 
-        $this->stopAudio = true;
+        $this->buffer->end();
+        $this->insertSilence();
+        $this->reset();
     }
 
     /**
@@ -1150,13 +1183,15 @@ class VoiceClient extends EventEmitter
     /**
      * Checks if the user is speaking.
      *
-     * @param int $id Either the User ID or SSRC.
+     * @param string|int|null $id Either the User ID or SSRC (if null, return bots speaking status).
      *
      * @return bool Whether the user is speaking.
      */
-    public function isSpeaking(string $id): bool
+    public function isSpeaking($id = null): bool
     {
-        if ($user = $this->speakingStatus->get('user_id', $id)) {
+        if (! isset($id)) {
+            return $this->speaking;
+        } elseif ($user = $this->speakingStatus->get('user_id', $id)) {
             return $user->speaking;
         } elseif ($ssrc = $this->speakingStatus->get('ssrc', $id)) {
             return $ssrc->speaking;
@@ -1227,7 +1262,7 @@ class VoiceClient extends EventEmitter
         $voicePacket = VoicePacket::make($message);
         $nonce = new Buffer(24);
         $nonce->write($voicePacket->getHeader(), 0);
-        $message = \Sodium\crypto_secretbox_open($voicePacket->getData(), (string) $nonce, $this->secret_key);
+        $message = \sodium_crypto_secretbox_open($voicePacket->getData(), (string) $nonce, $this->secret_key);
 
         if ($message === false) {
             // if we can't decode the message, drop it silently.
@@ -1367,7 +1402,7 @@ class VoiceClient extends EventEmitter
      */
     private function checkForLibsodium(): bool
     {
-        if (! function_exists('\Sodium\crypto_secretbox')) {
+        if (! function_exists('sodium_crypto_secretbox')) {
             $this->emit('error', [new LibSodiumNotFoundException('libsodium-php could not be found.')]);
 
             return false;
@@ -1379,11 +1414,11 @@ class VoiceClient extends EventEmitter
     private function checkPHPVersion(): bool
     {
         if (substr(strtolower(PHP_OS), 0, 3) === 'win' && PHP_VERSION_ID < 80000) {
-            $this->emit('error', [new RuntimeException('PHP 8.0.0 or later is required to run the voice client on Windows.')]);
+            $this->emit('error', [new \RuntimeException('PHP 8.0.0 or later is required to run the voice client on Windows.')]);
 
             return false;
         } elseif (PHP_VERSION_ID < 70400) {
-            $this->emit('error', [new RuntimeException('PHP 7.4.0 or later is required to run the voice client.')]);
+            $this->emit('error', [new \RuntimeException('PHP 7.4.0 or later is required to run the voice client.')]);
 
             return false;
         }
@@ -1399,8 +1434,8 @@ class VoiceClient extends EventEmitter
      */
     private static function checkForExecutable(string $executable): ?string
     {
-        $which = strtoupper(substr(PHP_OS, 0, 3) === 'WIN') ? 'where' : 'command -v';
-        $executable = rtrim(shell_exec("{$which} {$executable}"));
+        $which = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN' ? 'where' : 'command -v';
+        $executable = rtrim((string) shell_exec("{$which} {$executable}"));
 
         return is_executable($executable) ? $executable : null;
     }
@@ -1473,5 +1508,16 @@ class VoiceClient extends EventEmitter
     public function getChannel(): Channel
     {
         return $this->channel;
+    }
+
+    /**
+     * Insert 5 frames of silence.
+     */
+    private function insertSilence(): void
+    {
+        // https://discord.com/developers/docs/topics/voice-connections#voice-data-interpolation
+        while ($this->silenceRemaining--) {
+            $this->sendBuffer(self::SILENCE_FRAME);
+        }
     }
 }

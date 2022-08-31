@@ -27,7 +27,7 @@ use Discord\Parts\User\User;
  *
  * @property User                  $user           The user that the presence update affects.
  * @property string                $guild_id       The unique identifier of the guild that the presence update affects.
- * @property Guild                 $guild          The guild that the presence update affects.
+ * @property Guild|null            $guild          The guild that the presence update affects.
  * @property string                $status         The updated status of the user.
  * @property Collection|Activity[] $activities     The activities of the user.
  * @property Activity              $game           The updated game of the user.
@@ -67,11 +67,11 @@ class PresenceUpdate extends Part
     /**
      * Gets the guild attribute.
      *
-     * @return Guild The guild that the user was in.
+     * @return Guild|null The guild that the user was in.
      */
-    protected function getGuildAttribute(): Guild
+    protected function getGuildAttribute(): ?Guild
     {
-        return $this->discord->guilds->offsetGet($this->guild_id);
+        return $this->discord->guilds->get('id', $this->guild_id);
     }
 
     /**
@@ -84,7 +84,7 @@ class PresenceUpdate extends Part
         $collection = Collection::for(Activity::class, null);
 
         foreach ($this->attributes['activities'] ?? [] as $activity) {
-            $collection->push($this->factory->create(Activity::class, $activity, true));
+            $collection->pushItem($this->factory->create(Activity::class, $activity, true));
         }
 
         return $collection;

@@ -27,6 +27,7 @@ abstract class Event
     use EventEmitterTrait;
 
     // General
+    /** Not to be confused with 'ready' */
     public const READY = 'READY';
     public const RESUMED = 'RESUMED';
     public const PRESENCE_UPDATE = 'PRESENCE_UPDATE';
@@ -67,16 +68,22 @@ abstract class Event
     public const INTEGRATION_UPDATE = 'INTEGRATION_UPDATE';
     public const INTEGRATION_DELETE = 'INTEGRATION_DELETE';
     public const WEBHOOKS_UPDATE = 'WEBHOOKS_UPDATE';
+    public const APPLICATION_COMMAND_PERMISSIONS_UPDATE = 'APPLICATION_COMMAND_PERMISSIONS_UPDATE';
 
     public const INVITE_CREATE = 'INVITE_CREATE';
     public const INVITE_DELETE = 'INVITE_DELETE';
+
+    public const AUTO_MODERATION_RULE_CREATE = 'AUTO_MODERATION_RULE_CREATE';
+    public const AUTO_MODERATION_RULE_UPDATE = 'AUTO_MODERATION_RULE_UPDATE';
+    public const AUTO_MODERATION_RULE_DELETE = 'AUTO_MODERATION_RULE_DELETE';
+    public const AUTO_MODERATION_ACTION_EXECUTION = 'AUTO_MODERATION_ACTION_EXECUTION';
 
     // Channel
     public const CHANNEL_CREATE = 'CHANNEL_CREATE';
     public const CHANNEL_DELETE = 'CHANNEL_DELETE';
     public const CHANNEL_UPDATE = 'CHANNEL_UPDATE';
     public const CHANNEL_PINS_UPDATE = 'CHANNEL_PINS_UPDATE';
-    
+
     // Threads
     public const THREAD_CREATE = 'THREAD_CREATE';
     public const THREAD_UPDATE = 'THREAD_UPDATE';
@@ -151,7 +158,7 @@ abstract class Event
     abstract public function handle(Deferred &$deferred, $data);
 
     /**
-     * Cache User repository from Event data
+     * Cache User repository from Event data.
      *
      * @param object $userdata
      */
@@ -161,7 +168,7 @@ abstract class Event
         if ($user = $this->discord->users->get('id', $userdata->id)) {
             $user->fill((array) $userdata);
         } else {
-            $this->discord->users->pushItem($this->factory->part(\Discord\Parts\User\User::class, (array) $userdata, true));
+            $this->discord->users->pushItem($this->factory->create(\Discord\Parts\User\User::class, $userdata, true));
         }
     }
 
